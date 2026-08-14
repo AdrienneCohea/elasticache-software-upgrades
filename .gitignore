@@ -1,0 +1,10 @@
+# Binaries
+bootstrap
+function.zip
+
+# IDEs
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
