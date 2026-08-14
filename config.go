@@ -7,9 +7,12 @@ import (
 
 // Config holds environment variables and runtime settings.
 type Config struct {
-	SNSTopicARN  string
-	ProdBakeDays int
-	Region       string
+	SNSTopicARN   string
+	AlphaBakeDays int
+	BetaBakeDays  int
+	GammaBakeDays int
+	ProdBakeDays  int
+	Region        string
 }
 
 // LoadConfig reads configuration settings from environment variables.
@@ -19,16 +22,21 @@ func LoadConfig() Config {
 		region = "us-east-1"
 	}
 
-	bakeDays := 7
-	if rawDays := os.Getenv("PROD_BAKE_DAYS"); rawDays != "" {
-		if parsed, err := strconv.Atoi(rawDays); err == nil {
-			bakeDays = parsed
+	return Config{
+		SNSTopicARN:   os.Getenv("SNS_TOPIC_ARN"),
+		AlphaBakeDays: getEnvInt("ALPHA_BAKE_DAYS", 0),
+		BetaBakeDays:  getEnvInt("BETA_BAKE_DAYS", 0),
+		GammaBakeDays: getEnvInt("GAMMA_BAKE_DAYS", 3),
+		ProdBakeDays:  getEnvInt("PROD_BAKE_DAYS", 7),
+		Region:        region,
+	}
+}
+
+func getEnvInt(key string, defaultVal int) int {
+	if raw := os.Getenv(key); raw != "" {
+		if val, err := strconv.Atoi(raw); err == nil {
+			return val
 		}
 	}
-
-	return Config{
-		SNSTopicARN:  os.Getenv("SNS_TOPIC_ARN"),
-		ProdBakeDays: bakeDays,
-		Region:       region,
-	}
+	return defaultVal
 }

@@ -37,6 +37,27 @@ func NewUpdater(ecClient *elasticache.Client, snsClient *sns.Client, accountID s
 	}
 }
 
+// GetRequiredBakeDays determines the required bake-in duration in days based on resource tags.
+func (u *Updater) GetRequiredBakeDays(tags map[string]string) (int, string) {
+	env := strings.ToLower(strings.TrimSpace(tags["Environment"]))
+	switch env {
+	case "alpha":
+		return u.cfg.AlphaBakeDays, "alpha"
+	case "beta":
+		return u.cfg.BetaBakeDays, "beta"
+	case "gamma":
+		return u.cfg.GammaBakeDays, "gamma"
+	case "prod", "production":
+		return u.cfg.ProdBakeDays, "prod"
+	default:
+		policy := strings.ToLower(strings.TrimSpace(tags["AutoUpdatePolicy"]))
+		if policy == "bake" {
+			return u.cfg.ProdBakeDays, "policy-bake"
+		}
+		return 0, env
+	}
+}
+
 // ProcessUpdates checks pending updates, evaluates policy tags and bake times, and applies updates.
 func (u *Updater) ProcessUpdates(ctx context.Context) (ExecutionResult, error) {
 	var result ExecutionResult
@@ -80,20 +101,28 @@ func (u *Updater) ProcessUpdates(ctx context.Context) (ExecutionResult, error) {
 			}
 
 			// Policy Check 1: AutoUpdatePolicy Tag
-			policy := strings.ToLower(tags["AutoUpdatePolicy"])
+			policy := strings.ToLower(strings.TrimSpace(tags["AutoUpdatePolicy"]))
 			if policy == "disabled" {
 				slog.Info("Skipping resource due to AutoUpdatePolicy=disabled", "resource", resourceID)
 				result.Skipped = append(result.Skipped, fmt.Sprintf("%s (Tag policy disabled)", resourceID))
 				continue
 			}
 
-			// Policy Check 2: Bake-in Period for Production or Policy=bake
-			isProd := strings.ToLower(tags["Environment"]) == "production" || policy == "bake"
-			if isProd && action.ServiceUpdateReleaseDate != nil {
+			// Policy Check 2: Environment Bake-in Period
+			requiredBakeDays, envLabel := u.GetRequiredBakeDays(tags)
+			if requiredBakeDays > 0 && action.ServiceUpdateReleaseDate != nil {
 				ageDays := int(time.Since(aws.ToTime(action.ServiceUpdateReleaseDate)).Hours() / 24)
-				if ageDays < u.cfg.ProdBakeDays {
-					msg := fmt.Sprintf("%s (Baking %dd/%dd)", resourceID, ageDays, u.cfg.ProdBakeDays)
-					slog.Info("Deferring update due to bake-in window", "resource", resourceID, "age_days", ageDays)
+				if ageDays < requiredBakeDays {
+					label := envLabel
+					if label == "" {
+						label = "environment"
+					}
+					msg := fmt.Sprintf("%s (%s baking %dd/%dd)", resourceID, label, ageDays, requiredBakeDays)
+					slog.Info("Deferring update due to bake-in window",
+						"resource", resourceID,
+						"env", label,
+						"age_days", ageDays,
+						"required_days", requiredBakeDays)
 					result.Skipped = append(result.Skipped, msg)
 					continue
 				}
