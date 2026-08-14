@@ -24,7 +24,7 @@ The `Environment` tag is present on all ElastiCache clusters/replication groups 
   - `AutoUpdatePolicy=bake`: Enforces the production bake-in window regardless of environment name.
   - `AutoUpdatePolicy=emergency-override` / `force`: Bypasses SSM Change Calendar freeze for the tagged resource.
 - **SNS Notifications**: Publishes an execution summary to an Amazon SNS topic detailing applied and skipped updates, including calendar state.
-- **Optimized Lambda Binary**: Built for `provided.al2023` / `arm64` runtime with `-tags lambda.norpc`.
+- **Optimized Lambda Binary & Container Support**: Deployable as a native ARM64 ZIP package or as an AWS Lambda container image (`provided.al2023`).
 
 ## Configuration
 
@@ -48,14 +48,19 @@ Each ElastiCache resource includes:
 
 ## Build and Packaging
 
-To compile the binary and generate the deployment ZIP package:
-
+### Option 1: ZIP Archive (for standard Lambda deployment)
 ```bash
 # Run unit tests
 make test
 
-# Build ARM64 binary (bootstrap) and zip for AWS Lambda
+# Build ARM64 binary (bootstrap) and package into function.zip
 make zip
+```
+
+### Option 2: Container Image (for Lambda Container Image deployment)
+```bash
+# Build Docker image using multi-stage provided.al2023 base
+make docker-build
 ```
 
 ## IAM Permissions
