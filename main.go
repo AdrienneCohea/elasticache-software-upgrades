@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/elasticache"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
@@ -42,7 +43,8 @@ func handler(ctx context.Context) (ExecutionResult, error) {
 	// 4. Initialize updater dependencies
 	ecClient := elasticache.NewFromConfig(awsCfg)
 	snsClient := sns.NewFromConfig(awsCfg)
-	updater := NewUpdater(ecClient, snsClient, accountID, cfg)
+	ssmClient := ssm.NewFromConfig(awsCfg)
+	updater := NewUpdater(ecClient, snsClient, ssmClient, accountID, cfg)
 
 	// 5. Execute updates check and processing
 	result, err := updater.ProcessUpdates(ctx)

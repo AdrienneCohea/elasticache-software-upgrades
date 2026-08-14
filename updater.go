@@ -11,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/elasticache"
 	"github.com/aws/aws-sdk-go-v2/service/elasticache/types"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
 
 // ExecutionResult records the updates applied and skipped during a run.
@@ -19,25 +21,49 @@ type ExecutionResult struct {
 	Skipped []string `json:"skipped"`
 }
 
+// SSMClientAPI defines the subset of SSM operations required by Updater.
+type SSMClientAPI interface {
+	GetCalendarState(ctx context.Context, params *ssm.GetCalendarStateInput, optFns ...func(*ssm.Options)) (*ssm.GetCalendarStateOutput, error)
+}
+
 // Updater encapsulates AWS SDK clients and update processing logic.
 type Updater struct {
 	ecClient  *elasticache.Client
 	snsClient *sns.Client
+	ssmClient SSMClientAPI
 	accountID string
 	cfg       Config
 }
 
 // NewUpdater initializes an Updater instance with AWS clients and configuration.
-func NewUpdater(ecClient *elasticache.Client, snsClient *sns.Client, accountID string, cfg Config) *Updater {
+func NewUpdater(ecClient *elasticache.Client, snsClient *sns.Client, ssmClient SSMClientAPI, accountID string, cfg Config) *Updater {
 	return &Updater{
 		ecClient:  ecClient,
 		snsClient: snsClient,
+		ssmClient: ssmClient,
 		accountID: accountID,
 		cfg:       cfg,
 	}
 }
 
+// IsChangeCalendarOpen checks whether the configured AWS SSM Change Calendar is in OPEN state.
+func (u *Updater) IsChangeCalendarOpen(ctx context.Context) (bool, error) {
+	if u.cfg.SSMCalendarName == "" || u.ssmClient == nil {
+		return true, nil
+	}
+
+	out, err := u.ssmClient.GetCalendarState(ctx, &ssm.GetCalendarStateInput{
+		CalendarNames: []string{u.cfg.SSMCalendarName},
+	})
+	if err != nil {
+		return false, fmt.Errorf("getting SSM change calendar state for '%s': %w", u.cfg.SSMCalendarName, err)
+	}
+
+	return out.State == ssmtypes.CalendarStateOpen, nil
+}
+
 // GetRequiredBakeDays determines the required bake-in duration in days based on resource tags.
+// Environments 'alpha', 'beta', and 'gamma' are non-production. 'prod' is production.
 func (u *Updater) GetRequiredBakeDays(tags map[string]string) (int, string) {
 	env := strings.ToLower(strings.TrimSpace(tags["Environment"]))
 	switch env {
@@ -61,6 +87,16 @@ func (u *Updater) GetRequiredBakeDays(tags map[string]string) (int, string) {
 // ProcessUpdates checks pending updates, evaluates policy tags and bake times, and applies updates.
 func (u *Updater) ProcessUpdates(ctx context.Context) (ExecutionResult, error) {
 	var result ExecutionResult
+
+	// Check SSM Change Calendar status if configured
+	calendarOpen, err := u.IsChangeCalendarOpen(ctx)
+	if err != nil {
+		slog.Warn("Failed to check SSM Change Calendar, proceeding with cautions",
+			"calendar", u.cfg.SSMCalendarName, "error", err)
+	} else if !calendarOpen {
+		slog.Info("SSM Change Calendar is CLOSED - production updates will be deferred",
+			"calendar", u.cfg.SSMCalendarName)
+	}
 
 	// Use AWS SDK Paginator for DescribeUpdateActions
 	paginator := elasticache.NewDescribeUpdateActionsPaginator(u.ecClient, &elasticache.DescribeUpdateActionsInput{
@@ -100,15 +136,29 @@ func (u *Updater) ProcessUpdates(ctx context.Context) (ExecutionResult, error) {
 					"resource", resourceID, "error", err)
 			}
 
-			// Policy Check 1: AutoUpdatePolicy Tag
+			env := strings.ToLower(strings.TrimSpace(tags["Environment"]))
 			policy := strings.ToLower(strings.TrimSpace(tags["AutoUpdatePolicy"]))
+
+			// Policy Check 1: AutoUpdatePolicy Tag (Opt-out)
 			if policy == "disabled" {
 				slog.Info("Skipping resource due to AutoUpdatePolicy=disabled", "resource", resourceID)
 				result.Skipped = append(result.Skipped, fmt.Sprintf("%s (Tag policy disabled)", resourceID))
 				continue
 			}
 
-			// Policy Check 2: Environment Bake-in Period
+			// Policy Check 2: SSM Change Calendar (Change Freeze for Production)
+			isProd := env == "prod" || env == "production" || policy == "bake"
+			hasEmergencyBypass := policy == "emergency-override" || policy == "force"
+
+			if isProd && !calendarOpen && !hasEmergencyBypass {
+				slog.Info("Deferring prod update due to active SSM Change Calendar freeze",
+					"resource", resourceID, "calendar", u.cfg.SSMCalendarName)
+				result.Skipped = append(result.Skipped,
+					fmt.Sprintf("%s (Deferred: SSM Change Calendar '%s' is CLOSED)", resourceID, u.cfg.SSMCalendarName))
+				continue
+			}
+
+			// Policy Check 3: Environment Bake-in Period
 			requiredBakeDays, envLabel := u.GetRequiredBakeDays(tags)
 			if requiredBakeDays > 0 && action.ServiceUpdateReleaseDate != nil {
 				ageDays := int(time.Since(aws.ToTime(action.ServiceUpdateReleaseDate)).Hours() / 24)
@@ -178,6 +228,15 @@ func (u *Updater) SendSummaryNotification(ctx context.Context, res ExecutionResu
 
 	var sb strings.Builder
 	sb.WriteString("ElastiCache Service Update Automation Execution Summary:\n\n")
+
+	if u.cfg.SSMCalendarName != "" {
+		calendarOpen, _ := u.IsChangeCalendarOpen(ctx)
+		stateStr := "OPEN"
+		if !calendarOpen {
+			stateStr = "CLOSED (Freeze Active)"
+		}
+		sb.WriteString(fmt.Sprintf("SSM Change Calendar: %s [%s]\n\n", u.cfg.SSMCalendarName, stateStr))
+	}
 
 	sb.WriteString(fmt.Sprintf("Applied Updates (%d):\n", len(res.Applied)))
 	if len(res.Applied) > 0 {

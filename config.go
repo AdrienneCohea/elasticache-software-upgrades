@@ -7,12 +7,13 @@ import (
 
 // Config holds environment variables and runtime settings.
 type Config struct {
-	SNSTopicARN   string
-	AlphaBakeDays int
-	BetaBakeDays  int
-	GammaBakeDays int
-	ProdBakeDays  int
-	Region        string
+	SNSTopicARN     string
+	SSMCalendarName string
+	AlphaBakeDays   int
+	BetaBakeDays    int
+	GammaBakeDays   int
+	ProdBakeDays    int
+	Region          string
 }
 
 // LoadConfig reads configuration settings from environment variables.
@@ -23,12 +24,13 @@ func LoadConfig() Config {
 	}
 
 	return Config{
-		SNSTopicARN:   os.Getenv("SNS_TOPIC_ARN"),
-		AlphaBakeDays: getEnvInt("ALPHA_BAKE_DAYS", 0),
-		BetaBakeDays:  getEnvInt("BETA_BAKE_DAYS", 0),
-		GammaBakeDays: getEnvInt("GAMMA_BAKE_DAYS", 3),
-		ProdBakeDays:  getEnvInt("PROD_BAKE_DAYS", 7),
-		Region:        region,
+		SNSTopicARN:     os.Getenv("SNS_TOPIC_ARN"),
+		SSMCalendarName: os.Getenv("SSM_CALENDAR_NAME"),
+		AlphaBakeDays:   getEnvInt("ALPHA_BAKE_DAYS", 0),
+		BetaBakeDays:    getEnvInt("BETA_BAKE_DAYS", 0),
+		GammaBakeDays:   getEnvInt("GAMMA_BAKE_DAYS", 3),
+		ProdBakeDays:    getEnvInt("PROD_BAKE_DAYS", 7),
+		Region:          region,
 	}
 }
 
